@@ -1,0 +1,50 @@
+-- Distributed Locking --
+
+public class DistributedLockingService
+{
+    // Inject Redis cache system.
+    private readonly IRedisCache _cache;
+
+    public Result SaveItem(string itemContent)
+    {
+        var lockKey = $"lock:{itemContent}";
+        
+        // Try to take the lock on Redis (e.g. for 40 seconds).
+        if (!_cache.TryAcquireLock(lockKey, TimeSpan.FromSeconds(40)))
+        {
+            return new Result(false, $"Another request is processing the item with content {itemContent}.");
+        }
+
+        try
+        {
+            // Check if content already exists.
+            var existingItems = ItemIntegrationBackend.FindItemsWithContent(itemContent);
+            if (existingItems.Count != 0)
+            {
+                return new Result(false, $"Item with content {itemContent} already exists.");
+            }
+
+            // Save new item.
+            var item = ItemIntegrationBackend.SaveItem(itemContent);
+            return new Result(true, $"Item with content {itemContent} saved with id {item.Id}");
+        }
+        finally
+        {
+            // Release the lock.
+            _cache.ReleaseLock(lockKey);
+        }
+    }
+    
+    public List<Item> GetAllItems()
+    {
+        return ItemIntegrationBackend.GetAllItems();
+    }
+}
+
+
+
+Weaknesses:
+    1-There may be additional overhead on performance because take lock and release operations can cause delays.
+    2-Failure to release locks on time can lead to problems such as "deadlock". Therefore, locks' expiration and healthy lock management are important.
+    3-Redis runs in-memory by default, so additional configurations (AOF-Append-Only File or RDB-Redis Database Backup) may be required to persist data. Otherwise, there is a risk of data loss.
+    4-Since every transaction made with Redis is performed over the network, network delays and outages can be a weak point. If there is a problem accessing the Redis server, the system's operational continuity can be at risk.
